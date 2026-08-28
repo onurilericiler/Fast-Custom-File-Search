@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fast File Search</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header & Search Box -->
+        <header>
+            <div class="brand">
+                <div class="brand-badge">⚡ INSTANT SCAN</div>
+                <h1>Fast File Search</h1>
+                <p class="subtitle">Search millions of local files & folders in milliseconds</p>
+            </div>
+            
+            <div class="search-container">
+                <div class="search-box">
+                    <span class="search-icon">🔍</span>
+                    <input 
+                        type="text" 
+                        id="searchInput" 
+                        placeholder="Search by name or path... (Press '/' to focus)" 
+                        autocomplete="off" 
+                        spellcheck="false"
+                        autofocus
+                    >
+                    <button id="clearBtn" class="clear-btn hidden" title="Clear input">✕</button>
+                </div>
+
+                <!-- File Type Filter Chips -->
+                <div class="filter-bar" id="filterBar">
+                    <button class="filter-chip active" data-type="all">
+                        <span class="chip-icon">🌐</span> All
+                    </button>
+                    <button class="filter-chip" data-type="folders">
+                        <span class="chip-icon">📁</span> Folders
+                    </button>
+                    <button class="filter-chip" data-type="documents">
+                        <span class="chip-icon">📄</span> Docs
+                    </button>
+                    <button class="filter-chip" data-type="code">
+                        <span class="chip-icon">💻</span> Code
+                    </button>
+                    <button class="filter-chip" data-type="images">
+                        <span class="chip-icon">🖼️</span> Images
+                    </button>
+                    <button class="filter-chip" data-type="videos">
+                        <span class="chip-icon">🎥</span> Videos
+                    </button>
+                    <button class="filter-chip" data-type="audio">
+                        <span class="chip-icon">🎵</span> Audio
+                    </button>
+                    <button class="filter-chip" data-type="archives">
+                        <span class="chip-icon">📦</span> Archives
+                    </button>
+                    <button class="filter-chip" data-type="executables">
+                        <span class="chip-icon">⚙️</span> Apps
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Results Area -->
+        <main>
+            <div id="statsBar" class="stats-bar hidden">
+                <div class="stats-left">
+                    <span id="resultsCount" class="results-count">0 items found</span>
+                    <span class="folders-first-badge">📁 Folders First</span>
+                </div>
+                <div class="stats-right">
+                    <span class="hint-text">Click any row to open on Windows</span>
+                </div>
+            </div>
+
+            <div id="loading" class="loading-indicator hidden">
+                <div class="spinner"></div>
+                <span>Searching indexed database...</span>
+            </div>
+
+            <ul id="resultsList" class="results-list"></ul>
+
+            <!-- Empty / Initial States -->
+            <div id="emptyState" class="state-card">
+                <div class="state-icon">⚡</div>
+                <h3>Ready to Search</h3>
+                <p>Start typing above to search indexed files and folders with instant preview.</p>
+                
+                <!-- Short Indexing Instruction -->
+                <div class="indexing-box">
+                    <div class="indexing-box-header">
+                        <span class="step-num">Step 1</span>
+                        <span>Index your drive or folder first via terminal:</span>
+                    </div>
+                    <div class="code-wrapper">
+                        <code id="cmdText">.\venv\Scripts\python.exe indexer.py "D:\"</code>
+                        <button id="copyCmdBtn" class="copy-btn" title="Copy command">Copy</button>
+                    </div>
+                </div>
+
+                <div class="quick-tips">
+                    <span>💡 Tip: Filter by Docs, Code, or Images using the chips above</span>
+                </div>
+            </div>
+
+            <div id="noResultsState" class="state-card hidden">
+                <div class="state-icon">🔍</div>
+                <h3>No Matches Found</h3>
+                <p>Try searching for a different keyword or switch the file type filter to <strong>All</strong>.</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const clearBtn = document.getElementById('clearBtn');
+        const resultsList = document.getElementById('resultsList');
+        const loading = document.getElementById('loading');
+        const emptyState = document.getElementById('emptyState');
+        const noResultsState = document.getElementById('noResultsState');
+        const statsBar = document.getElementById('statsBar');
+        const resultsCount = document.getElementById('resultsCount');
+        const filterBar = document.getElementById('filterBar');
+        const toast = document.getElementById('toast');
+        
+        let debounceTimer = null;
+        let currentFilter = 'all';
+        let latestSearchId = 0;
+
+        // Filter chips switching
+        filterBar.addEventListener('click', (e) => {
+            const chip = e.target.closest('.filter-chip');
+            if (!chip) return;
+            
+            document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            currentFilter = chip.dataset.type;
+            
+            if (searchInput.value.trim()) {
+                executeSearch();
+            }
+        });
+
+        // Search input handling
+        searchInput.addEventListener('input', () => {
+            const query = searchInput.value.trim();
+            clearBtn.classList.toggle('hidden', !query);
+            
+            clearTimeout(debounceTimer);
+            if (!query) {
+                resultsList.innerHTML = '';
+                statsBar.classList.add('hidden');
+                noResultsState.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                return;
+            }
+
+            loading.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            noResultsState.classList.add('hidden');
+            
+            debounceTimer = setTimeout(executeSearch, 200);
+        });
+
+        // Clear input button
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            clearBtn.classList.add('hidden');
+            resultsList.innerHTML = '';
+            statsBar.classList.add('hidden');
+            noResultsState.classList.add('hidden');
+            emptyState.classList.remove('hidden');
+            searchInput.focus();
+        });
+
+        // Keyboard navigation & shortcuts
+        window.addEventListener('keydown', (e) => {
+            if (e.key === '/' && document.activeElement !== searchInput) {
+                e.preventDefault();
+                searchInput.focus();
+                searchInput.select();
+            }
+        });
+
+        async function executeSearch() {
+            const query = searchInput.value.trim();
+            if (!query) return;
+
+            const searchId = ++latestSearchId;
+            loading.classList.remove('hidden');
+            
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(currentFilter)}`);
+                const data = await response.json();
+                
+                // Avoid race conditions from older slow requests
+                if (searchId !== latestSearchId) return;
+
+                renderResults(data.results, query);
+            } catch (error) {
+                console.error("Search error:", error);
+                showToast("Search failed. Check server connection.", "error");
+            } finally {
+                if (searchId === latestSearchId) {
+                    loading.classList.add('hidden');
+                }
+            }
+        }
+
+        function getFileIcon(filename, isDirectory) {
+            if (isDirectory) return '📁';
+            const ext = filename.slice((filename.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
+            
+            const docExts = ['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'md', 'log'];
+            const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'tiff', 'heic', 'raw', 'psd'];
+            const vidExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v'];
+            const audExts = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a', 'opus'];
+            const codeExts = ['py', 'js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'scss', 'json', 'yaml', 'yml', 'xml', 'sql', 'c', 'cpp', 'h', 'hpp', 'cs', 'java', 'rs', 'go', 'php', 'sh', 'bat', 'ps1', 'lua', 'vue'];
+            const archExts = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'cab'];
+            const exeExts = ['exe', 'msi', 'cmd', 'bat', 'ps1', 'apk'];
+
+            if (docExts.includes(ext)) return '📄';
+            if (imgExts.includes(ext)) return '🖼️';
+            if (vidExts.includes(ext)) return '🎥';
+            if (audExts.includes(ext)) return '🎵';
+            if (codeExts.includes(ext)) return '💻';
+            if (archExts.includes(ext)) return '📦';
+            if (exeExts.includes(ext)) return '⚙️';
+            return '📄';
+        }
+
+        function highlightMatch(text, query) {
+            if (!query) return text;
+            const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            return text.replace(regex, '<mark>$1</mark>');
+        }
+
+        function renderResults(results, query) {
+            resultsList.innerHTML = '';
+            
+            if (!results || results.length === 0) {
+                statsBar.classList.add('hidden');
+                emptyState.classList.add('hidden');
+                noResultsState.classList.remove('hidden');
+                return;
+            }
+
+            noResultsState.classList.add('hidden');
+            emptyState.classList.add('hidden');
+            statsBar.classList.remove('hidden');
+
+            const folderCount = results.filter(r => r.is_directory).length;
+            const fileCount = results.length - folderCount;
+            
+            let countText = `${results.length} results`;
+            if (folderCount > 0 && fileCount > 0) {
+                countText = `${results.length} results (${folderCount} folders, ${fileCount} files)`;
+            } else if (folderCount > 0) {
+                countText = `${folderCount} folders found`;
+            } else {
+                countText = `${fileCount} files found`;
+            }
+            resultsCount.textContent = countText;
+
+            results.forEach(result => {
+                const li = document.createElement('li');
+                li.className = `result-item ${result.is_directory ? 'is-folder' : 'is-file'}`;
+                
+                const icon = document.createElement('span');
+                icon.className = `icon ${result.is_directory ? 'folder-icon' : 'file-icon'}`;
+                icon.textContent = getFileIcon(result.filename, result.is_directory);
+                
+                const info = document.createElement('div');
+                info.className = 'info';
+                
+                const headerRow = document.createElement('div');
+                headerRow.className = 'item-header';
+                
+                const filename = document.createElement('div');
+                filename.className = 'filename';
+                filename.innerHTML = highlightMatch(result.filename, query);
+                
+                headerRow.appendChild(filename);
+                if (result.is_directory) {
+                    const tag = document.createElement('span');
+                    tag.className = 'badge folder-badge';
+                    tag.textContent = 'FOLDER';
+                    headerRow.appendChild(tag);
+                } else {
+                    const ext = result.filename.slice((result.filename.lastIndexOf(".") - 1 >>> 0) + 2).toUpperCase();
+                    if (ext && ext.length <= 5) {
+                        const tag = document.createElement('span');
+                        tag.className = 'badge ext-badge';
+                        tag.textContent = ext;
+                        headerRow.appendChild(tag);
+                    }
+                }
+                
+                const filepath = document.createElement('div');
+                filepath.className = 'filepath';
+                filepath.innerHTML = highlightMatch(result.filepath, query);
+                filepath.title = result.filepath;
+                
+                info.appendChild(headerRow);
+                info.appendChild(filepath);
+                
+                const actionBtn = document.createElement('button');
+                actionBtn.className = 'open-btn';
+                actionBtn.innerHTML = '<span>Open</span> ↗';
+                actionBtn.title = 'Open in native Windows app';
+                
+                li.appendChild(icon);
+                li.appendChild(info);
+                li.appendChild(actionBtn);
+                
+                li.addEventListener('click', async () => {
+                    try {
+                        li.classList.add('opening');
+                        const response = await fetch('/api/open', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ filepath: result.filepath })
+                        });
+                        const data = await response.json();
+                        if (data.status === 'error') {
+                            showToast(`Failed to open: ${data.message}`, 'error');
+                        } else {
+                            showToast(`Opened: ${result.filename}`, 'success');
+                        }
+                    } catch (err) {
+                        console.error('Failed to open:', err);
+                        showToast('Error communicating with backend', 'error');
+                    } finally {
+                        li.classList.remove('opening');
+                    }
+                });
+                
+                resultsList.appendChild(li);
+            });
+        }
+
+        // Copy command button
+        const copyCmdBtn = document.getElementById('copyCmdBtn');
+        if (copyCmdBtn) {
+            copyCmdBtn.addEventListener('click', () => {
+                const cmd = document.getElementById('cmdText').textContent;
+                navigator.clipboard.writeText(cmd).then(() => {
+                    copyCmdBtn.textContent = 'Copied!';
+                    copyCmdBtn.classList.add('copied');
+                    showToast('Command copied to clipboard', 'success');
+                    setTimeout(() => {
+                        copyCmdBtn.textContent = 'Copy';
+                        copyCmdBtn.classList.remove('copied');
+                    }, 2000);
+                }).catch(() => {
+                    showToast('Failed to copy command', 'error');
+                });
+            });
+        }
+
+        let toastTimer = null;
+        function showToast(message, type = 'info') {
+            clearTimeout(toastTimer);
+            toast.textContent = message;
+            toast.className = `toast ${type} show`;
+            toastTimer = setTimeout(() => {
+                toast.className = 'toast hidden';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
